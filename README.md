@@ -111,10 +111,6 @@ NumPy note above) and then runs `aligned-read-search … --json`.
 | `search.py` | Orchestrator: expand → query → dedup by run → enrich alignment |
 | `cli.py` / `mcp_server.py` | CLI and MCP surfaces over `search_phenotype` |
 
-See `aligned_read_search` plan notes for the v2 roadmap (access tier, file
-format, WGS/exome, cloud/https/ftp access methods, publications, sample
-attributes, reference genome, coverage).
-
 ## Tests
 
 ```bash
