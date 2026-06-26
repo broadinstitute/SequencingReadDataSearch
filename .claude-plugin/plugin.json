@@ -1,6 +1,5 @@
 {
   "name": "aligned-read-search",
   "description": "Find SRA/ENA sequencing datasets by phenotype, focused on aligned (BAM/CRAM) reads.",
-  "version": "0.1.0",
   "author": { "name": "Broad Institute" }
 }
