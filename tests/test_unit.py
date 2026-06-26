@@ -14,7 +14,12 @@ from aligned_read_search.archives.ena import (
 )
 from aligned_read_search.archives.sra import SraClient
 from aligned_read_search.models import Dataset
-from aligned_read_search.query import IdentityExpander, tokenize
+from aligned_read_search.query import (
+    _GENERIC_SUBTYPE_STOPWORDS,
+    IdentityExpander,
+    OntologyExpander,
+    tokenize,
+)
 from aligned_read_search import search as search_mod
 from aligned_read_search.search import _dedup, _enrich, search_phenotype, to_dataframe
 
@@ -33,9 +38,51 @@ def test_tokenize_drops_stopwords_and_numbers():
     assert "12" not in toks
 
 
+def test_tokenize_extra_stop_drops_generics():
+    # Without extra_stop the generic words survive...
+    assert tokenize("infantile liver failure") == ["infantile", "liver", "failure"]
+    # ...with the generic subtype stoplist they're dropped.
+    assert tokenize("infantile liver failure", extra_stop=_GENERIC_SUBTYPE_STOPWORDS) == []
+
+
 def test_tokenize_keeps_known_short():
     assert "sca" in tokenize("SCA")
     assert "frda" in tokenize("FRDA")
+
+
+class _FakeOnto(OntologyExpander):
+    """OntologyExpander with the two network calls stubbed for offline tests."""
+
+    def __init__(self, primary_label, descendants):
+        super().__init__()
+        self._primary_label = primary_label
+        self._descendants = descendants
+
+    def _search_docs(self, term):
+        return [{"label": self._primary_label, "iri": "http://example/primary"}]
+
+    def _descendant_docs(self, iri):
+        return [{"label": lbl} for lbl in self._descendants]
+
+
+def test_expand_filters_generic_tokens_from_descendants():
+    toks = _FakeOnto(
+        "ataxia",
+        ["infantile liver failure", "intellectual disability", "spinocerebellar ataxia 1"],
+    ).expand("ataxia")
+    # Disease identity + distinctive subtype words survive.
+    assert "ataxia" in toks
+    assert "spinocerebellar" in toks
+    # Generic anatomy/finding/age words from subtype labels are dropped.
+    for generic in ("liver", "failure", "infantile", "intellectual", "disability"):
+        assert generic not in toks
+
+
+def test_expand_keeps_generic_word_when_it_is_the_primary_term():
+    # "anemia" is in the generic stoplist, but a direct search for it must keep it
+    # because it's the disease's own identity, not a descendant-derived token.
+    toks = _FakeOnto("anemia", []).expand("anemia")
+    assert "anemia" in toks
 
 
 def test_all_token_matches():
@@ -92,31 +139,46 @@ def test_ena_row_no_alignment():
 
 
 def test_sra_mapper_via_fake_df():
-    import pandas as pd
-
     class FakeSra(SraClient):
         def _run_search(self, query, limit):
             return pd.DataFrame(
                 [
+                    # Matches via experiment_title.
                     {
-                        "run_accession": "SRR1",
+                        "run_1_accession": "SRR1",
                         "study_accession": "SRP1",
                         "sample_scientific_name": "Homo sapiens",
                         "experiment_library_strategy": "WXS",
                         "experiment_title": "Exome of ataxia patient",
-                        "run_total_spots": "500",
-                        "run_total_bases": "75000",
-                    }
+                        "run_1_total_spots": "500",
+                        "run_1_total_bases": "75000",
+                    },
+                    # Matches only via study_study_abstract (the verbosity=3 field
+                    # where the disease term actually lives).
+                    {
+                        "run_1_accession": "SRR2",
+                        "experiment_title": "",
+                        "study_study_abstract": "Whole-genome study of ataxia cohort",
+                        "experiment_library_strategy": "WGS",
+                    },
+                    # No token in any descriptive field -> dropped.
+                    {
+                        "run_1_accession": "SRR3",
+                        "experiment_title": "Unrelated control sample",
+                        "study_study_abstract": "Healthy donor baseline",
+                    },
                 ]
             )
 
     out = FakeSra().search(["ataxia"], limit=5)
-    assert len(out) == 1
-    assert out[0].run_accession == "SRR1"
-    assert out[0].library_strategy == "WXS"
-    assert out[0].read_count == 500
-    assert out[0].has_alignment is False
-    assert out[0].phenotype_match == "ataxia"
+    accs = {d.run_accession for d in out}
+    assert accs == {"SRR1", "SRR2"}  # SRR3 dropped (no match)
+    by_acc = {d.run_accession: d for d in out}
+    assert by_acc["SRR1"].read_count == 500
+    assert by_acc["SRR1"].library_strategy == "WXS"
+    assert by_acc["SRR1"].phenotype_match == "ataxia"
+    assert by_acc["SRR2"].phenotype_match == "ataxia"  # matched via abstract
+    assert all(d.phenotype_match for d in out)  # never empty
 
 
 def test_dedup_prefers_alignment():

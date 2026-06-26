@@ -17,6 +17,29 @@ from .base import ArchiveClient, all_token_matches
 
 logger = logging.getLogger(__name__)
 
+# Descriptive columns where a disease/phenotype legitimately appears. We avoid
+# scanning every column (urls/filenames/md5s) so short acronym tokens don't
+# match spuriously. ``sample_attributes_*_value`` columns are added dynamically.
+_MATCH_FIELDS = (
+    "experiment_title",
+    "study_study_title",
+    "study_study_abstract",
+    "sample_title",
+    "experiment_design_description",
+    "experiment_library_name",
+    "sample_alias",
+)
+
+
+def _match_text(row) -> str:
+    parts = [_pick(row, c) for c in _MATCH_FIELDS]
+    parts += [
+        str(v)
+        for k, v in row.items()
+        if k.startswith("sample_attributes_") and k.endswith("_value") and v
+    ]
+    return " ".join(p for p in parts if p)
+
 
 def _pick(row, *names) -> str:
     for n in names:
@@ -36,7 +59,11 @@ def _pick_int(row, *names) -> Optional[int]:
 class SraClient(ArchiveClient):
     name = "sra"
 
-    def __init__(self, verbosity: int = 2):
+    def __init__(self, verbosity: int = 3):
+        # verbosity=3 makes SraSearch return the descriptive columns
+        # (study_study_title, study_study_abstract, sample_title,
+        # sample_attributes_*) where the phenotype actually lives; lower
+        # verbosity omits them entirely.
         self.verbosity = verbosity
 
     def _run_search(self, query: str, limit: int):
@@ -58,20 +85,20 @@ class SraClient(ArchiveClient):
             return []
 
         datasets = []
+        skipped = 0
         for row in df.to_dict("records"):
             run_acc = _pick(row, "run_accession", "run_1_accession")
             if not run_acc:
                 continue
+            # Require a visible justification: NCBI All-Fields can match on
+            # fields we don't surface, so drop runs with no token in our
+            # descriptive text rather than return an empty phenotype_match.
+            matched = all_token_matches(_match_text(row), tokens)
+            if not matched:
+                skipped += 1
+                continue
             title = _pick(row, "experiment_title", "study_study_title")
             organism = _pick(row, "sample_scientific_name", "organism_name", "common_name")
-            match_text = " ".join(
-                _pick(row, c)
-                for c in (
-                    "experiment_title",
-                    "study_study_title",
-                    "study_study_abstract",
-                )
-            )
             datasets.append(
                 Dataset(
                     run_accession=run_acc,
@@ -84,12 +111,14 @@ class SraClient(ArchiveClient):
                     instrument_model=_pick(row, "experiment_instrument_model"),
                     library_strategy=_pick(row, "experiment_library_strategy"),
                     title=title,
-                    phenotype_match=all_token_matches(match_text, tokens),
+                    phenotype_match=matched,
                     has_alignment=False,  # enriched via ENA later
                     alignment_urls=[],
                     read_urls=[],
-                    read_count=_pick_int(row, "run_total_spots", "total_spots"),
-                    base_count=_pick_int(row, "run_total_bases", "total_bases"),
+                    read_count=_pick_int(row, "run_1_total_spots", "run_total_spots", "total_spots"),
+                    base_count=_pick_int(row, "run_1_total_bases", "run_total_bases", "total_bases"),
                 )
             )
+        if skipped:
+            logger.info("Dropped %d SRA run(s) with no phenotype match in descriptive fields", skipped)
         return datasets

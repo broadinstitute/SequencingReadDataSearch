@@ -66,6 +66,29 @@ _STOPWORDS = {
     "secondary",
 }
 
+# Generic anatomy / body-region / finding / age-descriptor words that show up in
+# disease *subtype* labels (e.g. "infantile liver failure", "intellectual
+# disability") but carry no disease-specific signal. These are filtered out of
+# tokens derived from descendant subtypes ONLY -- never from the user's own term
+# or the primary disease label -- so a direct search for e.g. "anemia" still
+# keeps that word. Heuristic and tunable.
+_GENERIC_SUBTYPE_STOPWORDS = {
+    # anatomy / body regions
+    "liver", "kidney", "renal", "hepatic", "cardiac", "cardiovascular", "brain",
+    "cerebral", "spinal", "muscular", "bone", "skeletal", "optic", "corneal",
+    "retinal", "choroidal", "macular", "ocular", "eye", "blood", "nerve",
+    "vision", "hearing", "pulmonary", "respiratory", "gastrointestinal",
+    "peripheral", "central", "proximal", "distal", "motor", "sensory",
+    # generic findings / symptoms
+    "failure", "anemia", "disability", "weakness", "atrophy", "hypotonia",
+    "hypogonadism", "seizure", "seizures", "intellectual", "developmental",
+    "cognitive", "growth", "retardation", "intrusion", "saccadic", "spastic",
+    "spasticity", "aniridia", "progressive", "generalized",
+    # age / onset descriptors
+    "infantile", "juvenile", "neonatal", "adult", "childhood", "prenatal",
+    "perinatal",
+}
+
 # Short tokens worth keeping despite being < 3 chars or numeric-ish.
 _KEEP_SHORT = {"sca", "ea1", "ea2", "frda", "ftd", "als", "ad", "pd"}
 
@@ -93,8 +116,14 @@ class IdentityExpander:
         return [term] if term else []
 
 
-def tokenize(phrase: str) -> List[str]:
-    """Split a label/synonym into distinctive single-word search tokens."""
+def tokenize(phrase: str, extra_stop: set | None = None) -> List[str]:
+    """Split a label/synonym into distinctive single-word search tokens.
+
+    ``extra_stop`` adds further stopwords for this call (used to strip generic
+    anatomy/finding words from descendant *subtype* labels without affecting the
+    primary term).
+    """
+    stop = _STOPWORDS if not extra_stop else _STOPWORDS | extra_stop
     tokens = []
     for raw in re.split(r"[^A-Za-z0-9]+", phrase.lower()):
         if not raw:
@@ -102,7 +131,7 @@ def tokenize(phrase: str) -> List[str]:
         if raw in _KEEP_SHORT:
             tokens.append(raw)
             continue
-        if raw in _STOPWORDS:
+        if raw in stop:
             continue
         if raw.isdigit():
             continue
@@ -254,13 +283,20 @@ class OntologyExpander:
             return [term]
         logger.info("Matched %d %s term(s) for %r", len(docs), self.ontology, term)
 
-        labels: List[str] = []
+        # The user's term and the single primary disease label define the
+        # disease's identity and are tokenized loosely. Every other ontology
+        # label -- sibling top-matches and descendant subtypes, whose multi-word
+        # names carry generic anatomy/finding words like "liver failure" or
+        # "intellectual disability" -- is tokenized with the generic stoplist so
+        # that noise doesn't become a search token.
+        primary_labels: List[str] = []
+        other_labels: List[str] = []
         acronyms: List[str] = []
         primary: dict | None = None
 
         if MONDO_CURIE_RE.match(term):
             primary = docs[0]
-            self._collect(primary, labels, acronyms)
+            self._collect(primary, primary_labels, acronyms)
         else:
             # Aggregate across top docs that are actually about this disease
             # (label shares a token with the query, e.g. "ataxia"), so a generic
@@ -271,27 +307,35 @@ class OntologyExpander:
                 if orig and any(tok in label for tok in orig):
                     if primary is None:
                         primary = doc
-                    self._collect(doc, labels, acronyms)
+                        self._collect(doc, primary_labels, acronyms)
+                    else:
+                        self._collect(doc, other_labels, acronyms)
             if primary is None:  # no label overlap; fall back to top hit
                 primary = docs[0]
-                self._collect(primary, labels, acronyms)
+                self._collect(primary, primary_labels, acronyms)
 
         if self.include_descendants and primary and primary.get("iri"):
             logger.info("Fetching descendant subtypes of %s", primary.get("label") or primary["iri"])
             descendants = self._descendant_docs(primary["iri"])
             logger.info("Found %d descendant subtype(s)", len(descendants))
             for doc in descendants:
-                self._collect(doc, labels, acronyms)
+                self._collect(doc, other_labels, acronyms)
 
-        # Tokenize labels (clean disease words), then append synonym acronyms
-        # and the user's own term, de-duplicating while preserving order.
+        # Order: primary label + user term (loose), then sibling/subtype labels
+        # (generic-filtered), then acronyms. De-dup preserving order.
         seen: set[str] = set()
         tokens: List[str] = []
-        for source in (*labels, term):
-            for tok in tokenize(source):
+
+        def _add(source: str, extra_stop: set | None = None) -> None:
+            for tok in tokenize(source, extra_stop=extra_stop):
                 if tok not in seen:
                     seen.add(tok)
                     tokens.append(tok)
+
+        for source in (*primary_labels, term):
+            _add(source)
+        for source in other_labels:
+            _add(source, extra_stop=_GENERIC_SUBTYPE_STOPWORDS)
         for tok in acronyms:
             if tok not in seen:
                 seen.add(tok)
