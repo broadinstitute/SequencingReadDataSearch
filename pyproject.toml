@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aligned-read-search"
+version = "0.1.0"
+description = "Find sequencing datasets on SRA and ENA by phenotype, with a focus on aligned reads."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "BSD-3-Clause" }
+authors = [{ name = "Broad Institute" }]
+dependencies = [
+    "pysradb>=2.2",
+    "pandas>=1.3",
+    # NOTE: pysradb's compiled deps (pandas/pyarrow) in some conda envs are built
+    # against NumPy 1.x; if you hit "_ARRAY_API not found", pin numpy<2.
+    "requests>=2.26",
+    "click>=8.0",
+]
+
+[project.optional-dependencies]
+mcp = ["mcp>=1.0"]
+dev = ["pytest>=7"]
+
+[project.scripts]
+aligned-read-search = "aligned_read_search.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["aligned_read_search*"]
+
+[tool.pytest.ini_options]
+markers = [
+    "network: tests that hit live SRA/ENA/OLS APIs (deselect with -m 'not network')",
+]
