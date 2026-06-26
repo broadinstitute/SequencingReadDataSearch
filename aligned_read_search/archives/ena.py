@@ -159,6 +159,7 @@ class EnaClient(ArchiveClient):
         )
         seen: set[str] = set()
         datasets: List[Dataset] = []
+        skipped = 0
         for i, start in enumerate(range(0, len(tokens), per_chunk), 1):
             if len(datasets) >= limit:
                 break
@@ -170,8 +171,16 @@ class EnaClient(ArchiveClient):
                 if not acc or acc in seen:
                     continue
                 seen.add(acc)
-                # Match against the full token set, not just this chunk.
-                datasets.append(self._row_to_dataset(row, tokens))
+                # Match against the full token set, not just this chunk. ENA's
+                # wildcard query is substring server-side, so drop rows with no
+                # *whole-word* token match (e.g. "ea1" inside an unrelated word).
+                ds = self._row_to_dataset(row, tokens)
+                if not ds.phenotype_match:
+                    skipped += 1
+                    continue
+                datasets.append(ds)
                 if len(datasets) >= limit:
                     break
+        if skipped:
+            logger.info("Dropped %d ENA run(s) with no whole-word phenotype match", skipped)
         return datasets

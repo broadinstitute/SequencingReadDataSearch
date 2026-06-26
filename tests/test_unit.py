@@ -16,6 +16,7 @@ from aligned_read_search.archives.sra import SraClient
 from aligned_read_search.models import Dataset
 from aligned_read_search.query import (
     _GENERIC_SUBTYPE_STOPWORDS,
+    _keep_acronym,
     IdentityExpander,
     OntologyExpander,
     tokenize,
@@ -68,31 +69,51 @@ class _FakeOnto(OntologyExpander):
 def test_expand_filters_generic_tokens_from_descendants():
     toks = _FakeOnto(
         "ataxia",
-        ["infantile liver failure", "intellectual disability", "spinocerebellar ataxia 1"],
+        [
+            "infantile liver failure",
+            "intellectual disability",
+            "muscular dystrophy",
+            "spinocerebellar ataxia 1",
+        ],
     ).expand("ataxia")
     # Disease identity + distinctive subtype words survive.
     assert "ataxia" in toks
     assert "spinocerebellar" in toks
     # Generic anatomy/finding/age words from subtype labels are dropped.
-    for generic in ("liver", "failure", "infantile", "intellectual", "disability"):
+    for generic in ("liver", "failure", "infantile", "intellectual", "disability", "dystrophy"):
         assert generic not in toks
 
 
 def test_expand_keeps_generic_word_when_it_is_the_primary_term():
-    # "anemia" is in the generic stoplist, but a direct search for it must keep it
-    # because it's the disease's own identity, not a descendant-derived token.
-    toks = _FakeOnto("anemia", []).expand("anemia")
-    assert "anemia" in toks
+    # Words in the generic stoplist (anemia, dystrophy) must still be kept when
+    # they're the disease's own identity, not a descendant-derived token.
+    assert "anemia" in _FakeOnto("anemia", []).expand("anemia")
+    assert "dystrophy" in _FakeOnto("muscular dystrophy", []).expand("muscular dystrophy")
 
 
-def test_all_token_matches():
-    assert (
-        all_token_matches("Spinocerebellar ataxia cohort", ["foo", "ataxia", "cerebellar"])
-        == "ataxia, cerebellar"
-    )
+def test_all_token_matches_whole_word():
+    # Whole-word, order-preserving.
+    assert all_token_matches("EA1 episodic ataxia", ["ea1", "ataxia"]) == "ea1, ataxia"
     assert all_token_matches("nothing here", ["ataxia"]) == ""
+    # Short acronym must NOT substring-match inside other words.
+    assert all_token_matches("a sea1der near area1", ["ea1"]) == ""
+    # "cerebellar" is part of "Spinocerebellar", not a standalone word.
+    assert all_token_matches("Spinocerebellar ataxia cohort", ["ataxia", "cerebellar"]) == "ataxia"
     # De-duplicates case-insensitively, preserves token order.
     assert all_token_matches("ATAXIA ataxia", ["ataxia", "Ataxia"]) == "ataxia"
+
+
+def test_keep_acronym():
+    # Digit-bearing or long-enough or allowlisted are kept.
+    assert _keep_acronym("ea1")
+    assert _keep_acronym("scar12")
+    assert _keep_acronym("scasi")  # len >= 5
+    assert _keep_acronym("sca")  # allowlisted
+    assert _keep_acronym("frda")  # allowlisted
+    # Ambiguous short pure-alpha codes are dropped.
+    assert not _keep_acronym("scan")
+    assert not _keep_acronym("capa")
+    assert not _keep_acronym("asat")
 
 
 def test_split_urls():
@@ -136,6 +157,22 @@ def test_ena_row_no_alignment():
     ds = EnaClient()._row_to_dataset(row, ["ataxia"])
     assert ds.has_alignment is False
     assert ds.alignment_urls == []
+
+
+def test_ena_search_drops_substring_only_matches():
+    # ENA's wildcard query is substring server-side; a row where the token only
+    # appears inside a longer word must be dropped client-side.
+    class FakeEna(EnaClient):
+        def _request(self, query, limit):
+            return [
+                {"run_accession": "ERR_BAD", "study_title": "bea1ch metagenome"},
+                {"run_accession": "ERR_OK", "study_title": "EA1 episodic ataxia"},
+            ]
+
+    out = FakeEna().search(["ea1"], limit=10)
+    accs = {d.run_accession for d in out}
+    assert accs == {"ERR_OK"}  # ERR_BAD dropped (substring-only)
+    assert out[0].phenotype_match == "ea1"
 
 
 def test_sra_mapper_via_fake_df():

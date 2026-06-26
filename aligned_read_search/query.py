@@ -80,10 +80,10 @@ _GENERIC_SUBTYPE_STOPWORDS = {
     "vision", "hearing", "pulmonary", "respiratory", "gastrointestinal",
     "peripheral", "central", "proximal", "distal", "motor", "sensory",
     # generic findings / symptoms
-    "failure", "anemia", "disability", "weakness", "atrophy", "hypotonia",
-    "hypogonadism", "seizure", "seizures", "intellectual", "developmental",
-    "cognitive", "growth", "retardation", "intrusion", "saccadic", "spastic",
-    "spasticity", "aniridia", "progressive", "generalized",
+    "failure", "anemia", "disability", "weakness", "atrophy", "dystrophy",
+    "hypotonia", "hypogonadism", "seizure", "seizures", "intellectual",
+    "developmental", "cognitive", "growth", "retardation", "intrusion",
+    "saccadic", "spastic", "spasticity", "aniridia", "progressive", "generalized",
     # age / onset descriptors
     "infantile", "juvenile", "neonatal", "adult", "childhood", "prenatal",
     "perinatal",
@@ -98,6 +98,21 @@ _ACRONYM_RE = re.compile(r"\b[A-Z][A-Z0-9]{1,6}\b")
 
 def _acronyms(text: str) -> List[str]:
     return [m.group(0).lower() for m in _ACRONYM_RE.finditer(text or "")]
+
+
+def _keep_acronym(acronym: str) -> bool:
+    """Keep only acronym tokens specific enough to avoid false positives.
+
+    Short pure-alpha codes (``scan``, ``capa``, ``asat``) collide with common
+    words even under whole-word matching, so we keep an acronym only if it
+    carries a digit (``ea1``, ``scar12``, ``kcna1``), is reasonably long
+    (>= 5 chars, e.g. ``scasi``), or is in the curated short allowlist.
+    """
+    return (
+        any(c.isdigit() for c in acronym)
+        or len(acronym) >= 5
+        or acronym in _KEEP_SHORT
+    )
 
 
 @runtime_checkable
@@ -337,7 +352,7 @@ class OntologyExpander:
         for source in other_labels:
             _add(source, extra_stop=_GENERIC_SUBTYPE_STOPWORDS)
         for tok in acronyms:
-            if tok not in seen:
+            if tok not in seen and _keep_acronym(tok):
                 seen.add(tok)
                 tokens.append(tok)
         final = tokens[: self.max_terms]
