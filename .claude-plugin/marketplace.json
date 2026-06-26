@@ -1,0 +1,15 @@
+{
+  "name": "sequencing-read-data-search",
+  "description": "Phenotype-driven search for SRA/ENA sequencing datasets, focused on aligned reads.",
+  "owner": { "name": "Broad Institute" },
+  "plugins": [
+    {
+      "name": "aligned-read-search",
+      "source": {
+        "source": "github",
+        "repo": "broadinstitute/SequencingReadDataSearch"
+      },
+      "description": "Find SRA/ENA sequencing datasets by phenotype, focused on aligned (BAM/CRAM) reads."
+    }
+  ]
+}

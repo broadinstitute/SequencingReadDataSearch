@@ -71,6 +71,35 @@ python -m aligned_read_search.mcp_server
 Exposes one tool,
 `search_datasets(phenotype, archives, limit, exact, include_unaligned, library_strategy)`.
 
+## Use as a Claude skill
+
+This repo ships a Claude Code skill (`skills/search-datasets/SKILL.md`) that
+drives the CLI, so Claude can find datasets for you on request (e.g. *"find
+aligned reads for ataxia"*). It's packaged as a plugin and a one-plugin
+marketplace, so there are two ways to install — both pull straight from GitHub.
+
+**Managed (plugin) — recommended:**
+
+```text
+/plugin marketplace add broadinstitute/SequencingReadDataSearch
+/plugin install aligned-read-search@sequencing-read-data-search
+/plugin update  aligned-read-search@sequencing-read-data-search   # later, to update
+```
+
+**Clone & pull:** clone the repo into your personal skills directory; the
+`.claude-plugin/plugin.json` makes it load as a skills-dir plugin. `git pull` to
+update.
+
+```bash
+git clone https://github.com/broadinstitute/SequencingReadDataSearch.git \
+  ~/.claude/skills/aligned-read-search
+# update later:
+git -C ~/.claude/skills/aligned-read-search pull
+```
+
+Either way, the skill ensures the package is `pip install`-ed (handling the
+NumPy note above) and then runs `aligned-read-search … --json`.
+
 ## Architecture
 
 | Module | Role |
